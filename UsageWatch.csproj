@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>usagewatch</AssemblyName>
+    <RootNamespace>AppUsage</RootNamespace>
+    <Version>0.1.0</Version>
+    <Product>UsageWatch</Product>
+    <Description>Windows 前台应用使用时长记录器，带实时看板与三层归类</Description>
+    <Authors>Fine974</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Fine974/UsageWatch</RepositoryUrl>
+    <UseWindowsForms>true</UseWindowsForms>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Web\index.html" />
+    <EmbeddedResource Include="Web\render.js" />
+  </ItemGroup>
+
+</Project>

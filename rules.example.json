@@ -1,0 +1,36 @@
+{
+  "_说明": "把这个文件复制到 %APPDATA%\\AppUsage\\rules.json 后修改即可生效，不需要重新编译。外部规则优先级高于内置规则。",
+  "_用法": [
+    "sites: 匹配窗口标题，命中后整段归到该站点。match 是正则（JSON 里反斜杠要写两次）。规则按顺序匹配，先命中先用，所以更具体的要放前面。",
+    "sites 的坑：站点规则优先于 apps 规则。如果某个进程的窗口标题恰好命中了站点规则，apps 里为它配的 group 会被忽略 —— 这时要改站点规则，不是改 apps。",
+    "sites 的坑：站点规则不分进程，别写太宽的模式（比如裸的 orders 会把 IDE 里同名项目的窗口也吃掉）。",
+    "sites 的坑：同名站点必须同分类，否则站点层聚合会取到先出现的那个分类。",
+    "apps: 按进程名（不含 .exe，大小写不敏感）归类。byProject=true 表示标题里第二层是「项目」而不是「页面」，IDE 类应用用这个。",
+    "drop: 窗口标题命中这里就整段丢弃，不计入任何统计。",
+    "改完重启一次 usagewatch 才会生效（内置归类结果有进程内缓存）。"
+  ],
+
+  "sites": [
+    { "match": "我们的订单系统", "site": "订单系统", "group": "业务系统" },
+    { "match": "^压测平台|压力测试", "site": "压测平台", "group": "内部工具" },
+    { "match": "https?://[^/]*\\.internal", "site": "内网服务", "group": "内部工具" },
+    { "match": "^\\d+\\.\\d+\\.\\d+\\.\\d+$", "site": "内网服务", "group": "内部工具" },
+    { "match": "Nacos|Consul|Eureka", "site": "注册中心", "group": "内部工具" },
+    { "match": "Kibana|Grafana|Prometheus", "site": "监控面板", "group": "内部工具" },
+    { "match": "Verdaccio|Nexus|Artifactory", "site": "制品仓库", "group": "内部工具" },
+    { "match": "Wiki|知识库", "site": "内部 Wiki", "group": "办公" }
+  ],
+
+  "apps": [
+    { "proc": "datagrip64", "name": "DataGrip", "group": "编码", "byProject": true },
+    { "proc": "spotify", "name": "Spotify", "group": "娱乐" },
+    { "proc": "workbuddy", "name": "WorkBuddy", "group": "AI工具" },
+    { "proc": "MCHOSE HUB", "name": "MCHOSE 驱动", "group": "系统" },
+    { "proc": "HipsMain", "name": "安全软件", "group": "系统" }
+  ],
+
+  "drop": [
+    "Windows 默认锁屏界面",
+    "新建标签页"
+  ]
+}
