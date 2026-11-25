@@ -14,20 +14,53 @@ internal sealed class DayPayload
     public int switches { get; set; }
     public double avgStay { get; set; }
     public FocusInfo focus { get; set; } = new();
+
+    /// <summary>深度工作块：同分类连续 ≥25 分钟视为一块，是「真正连续推进」的证据。</summary>
+    public int deepCount { get; set; }
+    public double deepSec { get; set; }
+
+    /// <summary>碎片化三指标，只统计工作类，避免系统弹窗把数字稀释掉。</summary>
+    public double medianStay { get; set; }
+    public double shortPct { get; set; }
+    public double switchPerHour { get; set; }
+
     public List<RowInfo> rows { get; set; } = new();
     public List<GroupInfo> groups { get; set; } = new();
     public List<SiteInfo> sites { get; set; } = new();
     public List<SegInfo> segs { get; set; } = new();
+    public List<UnknownInfo> unknown { get; set; } = new();
     public double[] hourly { get; set; } = new double[24];
     public List<StackInfo> hourlyStack { get; set; } = new();
-    public List<string> insights { get; set; } = new();
+    public List<InsightInfo> insights { get; set; } = new();
 }
 
 internal sealed class FocusInfo
 {
+    /// <summary>分类口径：同一分类内部换站点/文件不算打断，这才是真实的深度工作时长。</summary>
     public string l { get; set; } = "";
+    public string sub { get; set; } = "";
     public double s { get; set; }
     public double d { get; set; }
+
+    /// <summary>站点口径：同一站点内连续，用来回答「在哪儿的」，数值通常明显更短。</summary>
+    public string sl { get; set; } = "";
+    public double ss { get; set; }
+    public double sd { get; set; }
+}
+
+/// <summary>一条解读。w 是重要度，前端按它排序后取前三条，不再靠数组下标猜。</summary>
+internal sealed class InsightInfo
+{
+    public string t { get; set; } = "";
+    public int w { get; set; }
+}
+
+/// <summary>落在「未归类 / 其他」里的页面，列出来是为了让人直接补规则。</summary>
+internal sealed class UnknownInfo
+{
+    public string n { get; set; } = "";
+    public string p { get; set; } = "";
+    public double sec { get; set; }
 }
 
 internal sealed class RowInfo
@@ -95,6 +128,12 @@ internal static class Payload
     };
 
     private static readonly string[] WeekNames = { "周日", "周一", "周二", "周三", "周四", "周五", "周六" };
+
+    /// <summary>深度工作块的下限：25 分钟。番茄钟口径，低于它更像是在处理零碎消息。</summary>
+    internal const double DeepBlockSec = 1500;
+
+    /// <summary>专注块判定：同类（或同站点）之间间隔不超过 3 分钟，算同一段。</summary>
+    internal const double FocusGapSec = 180;
 
     /// <summary>一段被裁剪、归类后的记录。</summary>
     internal readonly record struct Work(
@@ -257,9 +296,25 @@ internal static class Payload
                 g = x.Group,
                 s = Math.Round((x.Start - day0).TotalSeconds, 1),
                 d = Math.Round(x.Sec, 1),
-                w = x.Title,
+                // 用去噪后的 Page，不要原始 Title：原始标题带着「和另外 28 个页面 - 个人 - Microsoft Edge」，
+                // hover 时根本看不清是哪个页面
+                w = x.Page.Length > 0 ? x.Page : x.Title,
             });
         }
+
+        // ---------- 未归类明细：列出来才能补规则 ----------
+        result.unknown = clipped
+            .Where(x => x.Group is "未归类" or "其他")
+            .GroupBy(x => x.Page)
+            .Select(g => new UnknownInfo
+            {
+                n = g.Key.Length > 0 ? g.Key : "(空标题)",
+                p = g.First().App,
+                sec = Math.Round(g.Sum(x => x.Sec), 1),
+            })
+            .OrderByDescending(x => x.sec)
+            .Take(12)
+            .ToList();
 
         // ---------- 每小时：按分类堆叠，能看出这个小时在做什么类型的事 ----------
         var hourly = new double[24];
@@ -297,13 +352,41 @@ internal static class Payload
             });
         }
 
-        var (focusLabel, focusStart, focusDur) = LongestFocus(clipped);
+        // ---------- 专注：两套口径并列 ----------
+        // 分类口径回答「真正连续投入了多久」，站点口径回答「在哪儿」。
+        // 只显示站点口径会严重低估：在 Cursor 里切文件、开分支对比，专注就被切断了。
+        var groupBlocks = GroupBlocks(clipped, FocusGapSec);
+        var siteBlocks = StrictSiteBlocks(clipped, FocusGapSec);
+        var bestGroup = BestBlock(groupBlocks);
+        var bestSite = BestBlock(siteBlocks);
+
         result.focus = new FocusInfo
         {
-            l = focusLabel,
-            s = Math.Round((focusStart - day0).TotalSeconds, 1),
-            d = Math.Round(focusDur, 1),
+            l = bestGroup.Key,
+            sub = bestGroup.Sub,
+            s = Sec(bestGroup, day0),
+            d = Math.Round(bestGroup.Dur, 1),
+            sl = bestSite.Key,
+            ss = Sec(bestSite, day0),
+            sd = Math.Round(bestSite.Dur, 1),
         };
+
+        var deep = groupBlocks.Where(b => b.Dur >= DeepBlockSec).ToList();
+        result.deepCount = deep.Count;
+        result.deepSec = Math.Round(deep.Sum(b => b.Dur), 1);
+
+        // ---------- 碎片化：只统计工作类 ----------
+        // 全量平均停留会被系统弹窗、未归类稀释，看起来没那么碎，但那不是真实感受
+        var workSegs = clipped.Where(x => Rules.IsWork(x.Group)).ToList();
+        if (workSegs.Count > 0)
+        {
+            var workSec = workSegs.Sum(x => x.Sec);
+            result.medianStay = Math.Round(Baseline.Median(workSegs.Select(x => x.Sec).ToList()), 1);
+            result.shortPct = Math.Round(workSegs.Count(x => x.Sec < 60) * 100.0 / workSegs.Count, 1);
+            result.switchPerHour = workSec > 0
+                ? Math.Round(workSegs.Count / (workSec / 3600), 1)
+                : 0;
+        }
 
         result.spanStartSec = Math.Round((t0 - day0).TotalSeconds, 1);
         result.spanEndSec = Math.Round((t1 - day0).TotalSeconds, 1);
@@ -319,21 +402,25 @@ internal static class Payload
         return result;
     }
 
-    private static List<string> BuildInsights(DayPayload p, List<Work> clipped, double totalSec)
+    /// <summary>
+    /// 生成解读。每条带重要度 w，前端直接排序取前三条 —— 不靠数组下标，
+    /// 因为这里随时会增删条目，下标一错就会把「分类占比」这种复述顶到最前面。
+    /// </summary>
+    private static List<InsightInfo> BuildInsights(DayPayload p, List<Work> clipped, double totalSec)
     {
-        var insights = new List<string>();
+        var list = new List<InsightInfo>();
+        void Add(int w, string t) => list.Add(new InsightInfo { w = w, t = t });
 
-        // 最值得看的一条：时间去哪儿了（按分类）。分类数量不定，不能写死下标
         if (p.groups.Count > 1)
         {
             var head = $"{p.groups[0].n} {p.groups[0].pct:F0}%（{Dur(p.groups[0].sec)}）";
             var rest = p.groups.Skip(1).Take(2).Select(g => $"{g.n} {g.pct:F0}%").ToList();
-            insights.Add($"时间主要落在 {head}，其次是 {string.Join("、", rest)}。");
+            Add(1, $"时间主要落在 {head}，其次是 {string.Join("、", rest)}。");
         }
 
         if (p.sites.Count > 1)
-            insights.Add($"待得最久的去处是 {p.sites[0].n}（{Dur(p.sites[0].sec)}，{p.sites[0].pct:F0}%），"
-                       + $"第二是 {p.sites[1].n} {Dur(p.sites[1].sec)}。");
+            Add(1, $"待得最久的去处是 {p.sites[0].n}（{Dur(p.sites[0].sec)}，{p.sites[0].pct:F0}%），"
+                 + $"第二是 {p.sites[1].n} {Dur(p.sites[1].sec)}。");
 
         // 浏览器专项：把「Edge 占了一整天」拆开，直接回答「浏览器里到底在干什么」
         var browserProcs = new[] { "msedge", "chrome", "firefox" };
@@ -352,23 +439,41 @@ internal static class Payload
                 .Select(g => new { S = g.Key, Sec = g.Sum(y => y.Sec) })
                 .OrderByDescending(x => x.Sec)
                 .First();
-            insights.Add($"浏览器共 {Dur(bSec)}（占全天 {bSec / totalSec * 100:F0}%），"
-                       + $"主要用在 {string.Join("、", parts)}；单站点最多是 {topSite.S} {Dur(topSite.Sec)}。");
+            Add(1, $"浏览器共 {Dur(bSec)}（占全天 {bSec / totalSec * 100:F0}%），"
+                 + $"主要用在 {string.Join("、", parts)}；单站点最多是 {topSite.S} {Dur(topSite.Sec)}。");
         }
 
+        // 专注：分类口径为主，站点口径作为对照写进同一句，避免两个数字互相打脸
         if (p.focus.d > 0)
         {
             var fs = TimeSpan.FromSeconds(p.focus.s);
             var fe = TimeSpan.FromSeconds(p.focus.s + p.focus.d);
-            insights.Add($"最长连续专注 {Dur(p.focus.d)}，出现在 {fs.Hours:D2}:{fs.Minutes:D2}–{fe.Hours:D2}:{fe.Minutes:D2}（{p.focus.l}）。");
+            var where = p.focus.sub.Length > 0 && p.focus.sub != p.focus.l ? $" · {p.focus.sub}" : "";
+            Add(6, $"最长专注 {Dur(p.focus.d)}，出现在 {fs.Hours:D2}:{fs.Minutes:D2}–{fe.Hours:D2}:{fe.Minutes:D2}"
+                 + $"（{p.focus.l}{where}）。按站点口径算是 {Dur(p.focus.sd)}（{p.focus.sl}）。");
         }
 
-        var avg = totalSec / Math.Max(1, clipped.Count);
-        var avgText = avg >= 120 ? $"{avg / 60:F0} 分钟" : $"{avg:F0} 秒";
-        var verdict = avg >= 1800 ? "节奏稳定，大块时间在推进主线"
-            : avg >= 600 ? "有一定碎片化，注意力大约每 10–30 分钟被打断一次"
-            : "切换非常频繁，时间被切得很碎";
-        insights.Add($"平均每次停留 {avgText}，全天切换 {p.switches} 次，{verdict}。");
+        if (p.deepCount > 0)
+            Add(7, $"有 {p.deepCount} 段超过 25 分钟的深度工作块，合计 {Dur(p.deepSec)}，占全天 {p.deepSec / totalSec * 100:F0}%。");
+        else if (totalSec >= 5400)
+            Add(7, "全天没有超过 25 分钟的深度工作块，时间都被切成了短段。");
+
+        // 碎片化：中位停留比平均停留更能反映真实手感，少数长段会把平均值拉高
+        if (p.medianStay > 0)
+        {
+            var verdict = p.shortPct >= 70 ? "大部分操作是被打断的"
+                : p.shortPct >= 45 ? "接近一半的操作不超过 1 分钟"
+                : "段落长度还算健康";
+            Add(5, $"工作中位停留 {p.medianStay:F0} 秒，短于 1 分钟的段落占 {p.shortPct:F0}%（{verdict}），"
+                 + $"平均每小时切换 {p.switchPerHour:F0} 次。");
+        }
+
+        if (p.unknown.Count > 0)
+        {
+            var unSec = p.unknown.Sum(x => x.sec);
+            if (unSec >= 300)
+                Add(9, $"{Dur(unSec)} 落在未归类的 {p.unknown.Count} 个页面上，规则还缺条目。");
+        }
 
         // 离开空档：覆盖率低到底是「阈值把工作切碎了」还是「本来就离开了」，必须写出来
         var gaps = new List<(DateTime A, DateTime B)>();
@@ -381,69 +486,114 @@ internal static class Payload
         if (gaps.Count > 0)
         {
             var longest = gaps.OrderByDescending(g => (g.B - g.A).TotalSeconds).First();
-            insights.Add($"离开电脑 {gaps.Count} 次（每次 ≥5 分钟），最长一次 {(longest.B - longest.A):h\\h\\ mm\\m}（{longest.A:HH:mm}–{longest.B:HH:mm}）。");
-        }
+            Add(4, $"离开电脑 {gaps.Count} 次（每次 ≥5 分钟），最长一次 {(longest.B - longest.A):h\\h\\ mm\\m}（{longest.A:HH:mm}–{longest.B:HH:mm}）。");        }
         else
         {
-            insights.Add("全天没有超过 5 分钟的离开，数据连续性很好。");
+            Add(2, "全天没有超过 5 分钟的离开，数据连续性很好。");
         }
 
-        return insights;
+        return list;
+    }
+
+    /// <summary>一段连续专注：同 key 且间隔不超过 gap 的记录合成一块。</summary>
+    internal readonly record struct Block(string Key, DateTime Start, DateTime End, string Sub)
+    {
+        public double Dur => Start == DateTime.MinValue ? 0 : (End - Start).TotalSeconds;
+    }
+
+    private static string Dominant(Dictionary<string, double> subSec)
+        => subSec.Count > 0 ? subSec.MaxBy(kv => kv.Value).Key : "";
+
+    /// <summary>
+    /// 分类口径的专注块：**只在该分类自己的段之间**判断间隔。
+    ///
+    /// 和「按时间轴逐段推进」的写法有本质区别。逐段推进时，中间插进来一条 10 秒的微信
+    /// 就会把前后的编码段切开 —— 实测下来 66 分钟的深度编码会被报成 20 分钟。
+    /// 这里改成：同类两段之间间隔 ≤3 分钟就合并，中间那点小打断算「顺手瞄了一眼」，
+    /// 不算专注结束。这正是番茄钟允许短暂中断的口径。
+    /// </summary>
+    internal static List<Block> GroupBlocks(List<Work> ordered, double gapSec)
+    {
+        var res = new List<Block>();
+
+        foreach (var grp in ordered.Where(x => Rules.IsWork(x.Group)).GroupBy(x => x.Group))
+        {
+            var seq = grp.OrderBy(x => x.Start).ToList();
+            var start = seq[0].Start;
+            var end = seq[0].End;
+            var subSec = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            void Accum(Work w) => subSec[w.Site] = subSec.TryGetValue(w.Site, out var v) ? v + w.Sec : w.Sec;
+            Accum(seq[0]);
+
+            for (var i = 1; i < seq.Count; i++)
+            {
+                var s = seq[i];
+                if ((s.Start - end).TotalSeconds <= gapSec)
+                {
+                    if (s.End > end) end = s.End;
+                    Accum(s);
+                    continue;
+                }
+                res.Add(new Block(grp.Key, start, end, Dominant(subSec)));
+                start = s.Start;
+                end = s.End;
+                subSec.Clear();
+                Accum(s);
+            }
+            res.Add(new Block(grp.Key, start, end, Dominant(subSec)));
+        }
+
+        return res;
     }
 
     /// <summary>
-    /// 最长专注按站点判定：同站点内 3 分钟以内的切换视为同一段专注。
-    /// 只统计工作类站点 —— 系统弹窗、驱动面板、娱乐页面连续停留再久也不算专注。
+    /// 站点口径的专注块：沿时间轴逐段推进，换到任何别的地方就算中断。
+    /// 数值明显更小，但它回答的是另一个问题 ——「有多久完全没离开过这个界面」。
     /// </summary>
-    internal static (string Label, DateTime Start, double Dur) LongestFocus(List<Work> segs)
+    internal static List<Block> StrictSiteBlocks(List<Work> ordered, double gapSec)
     {
-        var bestDur = 0.0;
-        var bestLabel = "";
-        var bestStart = DateTime.MinValue;
-
-        var curSite = "";
-        var curStart = DateTime.MinValue;
-        var curEnd = DateTime.MinValue;
+        var res = new List<Block>();
+        var open = false;
+        var site = "";
+        var start = DateTime.MinValue;
+        var end = DateTime.MinValue;
 
         void Settle()
         {
-            if (curSite.Length == 0) return;
-            var d = (curEnd - curStart).TotalSeconds;
-            if (d > bestDur)
-            {
-                bestDur = d;
-                bestLabel = curSite;
-                bestStart = curStart;
-            }
+            if (open) res.Add(new Block(site, start, end, site));
         }
 
-        foreach (var s in segs.OrderBy(x => x.Start))
+        foreach (var s in ordered)
         {
-            // 非工作段直接切断当前专注，不能让它把前后两段工作「接」起来
             if (!Rules.IsWork(s.Group))
             {
                 Settle();
-                curSite = "";
+                open = false;
                 continue;
             }
 
-            if (curSite.Equals(s.Site, StringComparison.OrdinalIgnoreCase) &&
-                (s.Start - curEnd).TotalSeconds <= 180)
+            if (open && site == s.Site && (s.Start - end).TotalSeconds <= gapSec)
             {
-                curEnd = s.End;
+                if (s.End > end) end = s.End;
             }
             else
             {
                 Settle();
-                curSite = s.Site;
-                curStart = s.Start;
-                curEnd = s.End;
+                open = true;
+                site = s.Site;
+                start = s.Start;
+                end = s.End;
             }
         }
         Settle();
-
-        return bestDur <= 0 ? ("", DateTime.MinValue, 0) : (bestLabel, bestStart, bestDur);
+        return res;
     }
+
+    private static Block BestBlock(List<Block> bs)
+        => bs.Count == 0 ? default : bs.MaxBy(b => b.Dur);
+
+    private static double Sec(Block b, DateTime day0)
+        => b.Dur <= 0 ? 0 : Math.Round((b.Start - day0).TotalSeconds, 1);
 
     internal static string Dur(double sec)
     {

@@ -50,8 +50,22 @@
 
   function pal() {
     return isDark()
-      ? { grid: '#1f2634', axis: '#59627a', muted: '#8b94a7', track: '#161d29', text: '#e8ecf3' }
-      : { grid: '#e7eaf0', axis: '#98a1b0', muted: '#5f6a7d', track: '#eef1f5', text: '#161b24' };
+      ? { grid: '#1f2634', axis: '#59627a', muted: '#8b94a7', track: '#161d29', text: '#e8ecf3', accent: '#4f9cf9' }
+      : { grid: '#e7eaf0', axis: '#98a1b0', muted: '#5f6a7d', track: '#eef1f5', text: '#161b24', accent: '#2f6fd0' };
+  }
+
+  // 个人高效时段：近 30 天里每小时编码秒数中位最高的几个钟头。
+  // 不看这个就永远不知道「自己几点最有效率」，只能凭感觉
+  function productiveHours(B) {
+    const set = new Set();
+    if (!B || !B.hourCodeMed || !B.hourCodeMed.length) return set;
+    B.hourCodeMed
+      .map((v, i) => ({ i, v }))
+      .filter(x => x.v > 0)
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 5)
+      .forEach(x => set.add(x.i));
+    return set;
   }
 
   function ticks(t0, t1, width, labelW, P) {
@@ -89,16 +103,19 @@
     el('k-cover').textContent = D.coverage.toFixed(0) + '%';
     el('k-switch').textContent = D.switches;
     el('k-focus').textContent = D.focus && D.focus.d > 0 ? fmt(D.focus.d) : '-';
+    el('k-deep').textContent = D.deepCount > 0 ? D.deepCount + ' 段' : '0';
+    el('k-stay').textContent = D.medianStay > 0 ? Math.round(D.medianStay) + 's' : '-';
     el('k-span').textContent = hhmm(D.firstSec) + '–' + hhmm(D.lastSec);
 
     renderDelta(D, B);
     renderTrend(D, B);
     renderGroups(D, B);
-    renderTimeline(D);
+    renderTimeline(D, B);
     renderDest(D);
     renderHourly(D);
     renderGantt(D);
     renderNotes(D, B);
+    renderUnknown(D);
   }
 
   function renderDelta(D, B) {
@@ -151,12 +168,24 @@
     }).join('');
   }
 
-  function renderTimeline(D) {
+  function renderTimeline(D, B) {
     const P = pal();
     const W = 1000, labelW = 58, t0 = D.spanStartSec, t1 = D.spanEndSec, span = t1 - t0 || 1;
     const plotW = W - labelW;
+    const hot = productiveHours(B);
+
     let s = `<svg viewBox="0 0 ${W} 64">`;
     s += ticks(t0, t1, W, labelW, P);
+
+    // 先铺高效时段的底色，再画使用块，块永远压在上面
+    for (const h of hot) {
+      const a = Math.max(t0, h * 3600), b = Math.min(t1, (h + 1) * 3600);
+      if (b <= a) continue;
+      const x = labelW + (a - t0) / span * plotW;
+      const w = (b - a) / span * plotW;
+      s += `<rect x="${x.toFixed(2)}" y="6" width="${w.toFixed(2)}" height="36" fill="${P.accent}" opacity=".10" rx="2"/>`;
+    }
+
     s += `<text x="0" y="24" fill="${P.muted}" font-size="12" dominant-baseline="central">全天</text>`;
     s += `<rect x="${labelW}" y="10" width="${plotW}" height="28" fill="${P.track}" rx="4"/>`;
     for (const g of D.segs) {
@@ -169,7 +198,8 @@
     el('timeline').innerHTML = s;
 
     const gaps = (1 - D.totalSec / ((D.lastSec - D.firstSec) || 1)) * 100;
-    el('tl-note').textContent = '空白 ' + Math.max(0, gaps).toFixed(0) + '% 为离开或锁屏';
+    const hotTxt = hot.size ? ' · 淡蓝为你的高效时段' : '';
+    el('tl-note').textContent = '空白 ' + Math.max(0, gaps).toFixed(0) + '% 为离开或锁屏' + hotTxt;
   }
 
   function destData(D) {
@@ -293,6 +323,7 @@
     const box = el('notes');
     const foot = el('notes-foot');
     const items = [];
+    const isFullDay = D.totalSec >= 10800;
 
     if (B && B.groupPct) {
       for (const g of D.groups) {
@@ -313,31 +344,36 @@
       items.push({ w: 20, cls: 'warn', t: `有 ${fmt(un.sec)} 落在未归类页面，规则还缺条目` });
     }
 
+    // 专注判断改用分类口径：站点口径会把「编码中切了下文件」也算成中断，
+    // 用它下结论会得出「你只有 20 分钟专注」这种错误判断
     if (D.focus && D.focus.d > 0) {
-      if (D.focus.d < 480) {
-        items.push({ w: 8, cls: 'warn', t: `最长专注只有 ${fmt(D.focus.d)}（${D.focus.l}），整天被切得很碎` });
-      } else if (D.focus.d >= 1500) {
-        items.push({ w: 6, cls: 'ok', t: `最长专注 ${fmt(D.focus.d)}，有一段完整推进（${D.focus.l}）` });
+      if (D.focus.d < 1500 && isFullDay) {
+        items.push({ w: 9, cls: 'warn', t: `最长专注只有 ${fmt(D.focus.d)}（${D.focus.l}），一整天没有超过 25 分钟的连续块` });
+      } else if (D.focus.d >= 2400) {
+        items.push({ w: 6, cls: 'ok', t: `最长专注 ${fmt(D.focus.d)}（${D.focus.l} · ${D.focus.sub}），有一段完整推进` });
       }
+    }
+
+    if (D.medianStay > 0 && D.shortPct >= 75 && isFullDay) {
+      items.push({
+        w: 8, cls: 'warn',
+        t: `工作中位停留 ${Math.round(D.medianStay)} 秒，${D.shortPct.toFixed(0)}% 的段落短于 1 分钟，每小时切换约 ${Math.round(D.switchPerHour)} 次`,
+      });
     }
 
     if (B && B.medCoverage) {
       if (D.coverage < B.medCoverage - 12) {
         items.push({ w: 7, cls: 'warn', t: `覆盖率 ${D.coverage.toFixed(0)}%，低于中位 ${B.medCoverage.toFixed(0)}%，离开时间偏多` });
       }
-      if (B.medSwitches && D.switches > B.medSwitches * 1.4) {
+      if (B.medSwitches && D.switches > B.medSwitches * 1.6) {
         items.push({ w: 5, t: `切换 ${D.switches} 次，明显多于中位 ${Math.round(B.medSwitches)} 次` });
       }
     }
 
     if (!items.length && D.insights && D.insights.length) {
-      // 没有异常时不要复述「编码占 43%」，优先给行为层面的观察：专注、碎片化、离开
-      const prefer = [3, 5, 4, 0, 1, 2];
-      const picked = [];
-      for (const i of prefer) {
-        if (D.insights[i] && picked.length < 3) picked.push(D.insights[i]);
-      }
-      picked.forEach((t, i) => items.push({ w: 3 - i, cls: '', t }));
+      // 没有异常时才退回后端解读。后端每条带权重，排序取前三，不再靠数组下标猜
+      D.insights.slice().sort((a, b) => b.w - a.w).slice(0, 3)
+        .forEach(x => items.push({ w: 0, cls: '', t: x.t }));
     }
 
     const top = items.sort((a, b) => b.w - a.w).slice(0, 3);
@@ -345,9 +381,15 @@
       ? top.map(x => `<li class="${x.cls}">${esc(x.t)}</li>`).join('')
       : '<li class="none">今天各项指标都在基线附近，没有异常。</li>';
 
-    foot.textContent = B
+    let extra = '';
+    if (D.focus && D.focus.sd > 0 && D.focus.sub) {
+      extra = ` · 完全没切换的最长段 ${fmt(D.focus.sd)}（${D.focus.sl}）`;
+    }
+    foot.textContent = (B
       ? `对比基准：近 30 天中位，参与统计 ${B.days} 个工作日`
-      : '静态报告，不含基线对比';
+      : '静态报告，不含基线对比') + extra;
+  }
+
   }
 
   const tip = () => document.getElementById('tip');

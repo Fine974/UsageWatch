@@ -8,6 +8,15 @@ internal sealed class BaseDay
     public double sec { get; set; }
 }
 
+/// <summary>某个星期几的历史水平，用于周视图里画「平时这个星期几有多长」。</summary>
+internal sealed class WeekdayBase
+{
+    public int w { get; set; }
+    public string n { get; set; } = "";
+    public double medSec { get; set; }
+    public int days { get; set; }
+}
+
 internal sealed class BaselineInfo
 {
     public int window { get; set; }
@@ -20,6 +29,13 @@ internal sealed class BaselineInfo
     public double medSwitches { get; set; }
     public Dictionary<string, double> groupPct { get; set; } = new();
     public List<BaseDay> recent { get; set; } = new();
+
+    /// <summary>24 小时画像：每小时活跃秒数与其中编码秒数的中位数，用来标出个人高效时段。</summary>
+    public List<double> hourMed { get; set; } = new();
+    public List<double> hourCodeMed { get; set; } = new();
+
+    /// <summary>周一至周日各天的历史中位时长。索引 0 = 周一。</summary>
+    public List<WeekdayBase> weekday { get; set; } = new();
 }
 
 /// <summary>
@@ -56,6 +72,8 @@ internal static class Baseline
         return info;
     }
 
+    private static readonly string[] WeekNames = { "周一", "周二", "周三", "周四", "周五", "周六", "周日" };
+
     private static BaselineInfo Compute(int window, DateTime today)
     {
         var info = new BaselineInfo { window = window };
@@ -74,6 +92,11 @@ internal static class Baseline
         var covers = new List<double>();
         var switchCounts = new List<double>();
         var groupPct = new Dictionary<string, List<double>>(StringComparer.Ordinal);
+
+        // 时段画像与星期画像：只有进统计的日子才参与，半天不参与，否则中位数会被拉低
+        var hourAll = Enumerable.Range(0, 24).Select(_ => new List<double>()).ToArray();
+        var hourCode = Enumerable.Range(0, 24).Select(_ => new List<double>()).ToArray();
+        var dowSec = Enumerable.Range(0, 7).Select(_ => new List<double>()).ToArray();
 
         // recent 按时间正序，趋势图从左到右就是日子往前走
         foreach (var d in Enumerable.Reverse(dates))
@@ -100,6 +123,14 @@ internal static class Baseline
 
             foreach (var g in work.GroupBy(x => x.Group))
                 Append(groupPct, g.Key, g.Sum(x => x.Sec) / total * 100);
+
+            var (hAll, hCode) = HourSplit(work);
+            for (var i = 0; i < 24; i++)
+            {
+                hourAll[i].Add(hAll[i]);
+                hourCode[i].Add(hCode[i]);
+            }
+            dowSec[((int)d.DayOfWeek + 6) % 7].Add(total);
         }
 
         info.days = totals.Count;
@@ -113,7 +144,39 @@ internal static class Baseline
         foreach (var kv in groupPct)
             info.groupPct[kv.Key] = Math.Round(Median(kv.Value), 1);
 
+        info.hourMed = hourAll.Select(x => Math.Round(Median(x), 0)).ToList();
+        info.hourCodeMed = hourCode.Select(x => Math.Round(Median(x), 0)).ToList();
+        info.weekday = Enumerable.Range(0, 7).Select(i => new WeekdayBase
+        {
+            w = i + 1,
+            n = WeekNames[i],
+            medSec = Math.Round(Median(dowSec[i]), 0),
+            days = dowSec[i].Count,
+        }).ToList();
+
         return info;
+    }
+
+    /// <summary>把一天切成 24 格，分别累加总活跃秒数与其中的编码秒数。</summary>
+    private static (double[] All, double[] Code) HourSplit(List<Payload.Work> work)
+    {
+        var all = new double[24];
+        var code = new double[24];
+        foreach (var w in work)
+        {
+            var isCode = w.Group == "编码";
+            var t = w.Start;
+            while (t < w.End)
+            {
+                var next = t.Date.AddHours(t.Hour + 1);
+                var stop = w.End < next ? w.End : next;
+                var span = (stop - t).TotalSeconds;
+                all[t.Hour] += span;
+                if (isCode) code[t.Hour] += span;
+                t = stop;
+            }
+        }
+        return (all, code);
     }
 
     private static void Append(Dictionary<string, List<double>> map, string key, double v)
