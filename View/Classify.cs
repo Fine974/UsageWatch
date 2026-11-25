@@ -55,6 +55,12 @@ internal static class Classify
         return r;
     }
 
+    /// <summary>规则改动后必须清缓存，否则旧归类结果会一直沿用，看起来像「保存没生效」。</summary>
+    internal static void ClearCache()
+    {
+        lock (Gate) Cache.Clear();
+    }
+
     private static Classified Compute(string proc, string? rawTitle)
     {
         var title = Normalize(rawTitle);

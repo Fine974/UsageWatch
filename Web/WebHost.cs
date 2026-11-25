@@ -19,6 +19,7 @@ internal static class WebHost
 
     private static HttpListener? _listener;
     private static string? _indexHtml;
+    private static string? _rulesHtml;
 
     internal static Task WhenReady => _ready.Task;
 
@@ -118,6 +119,23 @@ internal static class WebHost
                     WriteJson(ctx, new { paused = false });
                     break;
 
+                // ---------- 规则管理 ----------
+                case "/rules":
+                    Write(ctx, "text/html; charset=utf-8", RulesHtml());
+                    break;
+
+                case "/api/rules" when isPost:
+                    SaveRules(ctx);
+                    break;
+
+                case "/api/rules":
+                    WriteJson(ctx, RulesApi.Get());
+                    break;
+
+                case "/api/rules/test" when isPost:
+                    TestRule(ctx);
+                    break;
+
                 default:
                     ctx.Response.StatusCode = 404;
                     Write(ctx, "text/plain; charset=utf-8", "not found");
@@ -145,6 +163,53 @@ internal static class WebHost
 
     private static void WriteJson(HttpListenerContext ctx, object data)
         => Write(ctx, "application/json; charset=utf-8", JsonSerializer.Serialize(data, JsonOpts));
+
+    private static string ReadBody(HttpListenerContext ctx)
+    {
+        if (!ctx.Request.HasEntityBody) return "";
+        using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    private static void SaveRules(HttpListenerContext ctx)
+    {
+        RulesSaveResult res;
+        try
+        {
+            var req = JsonSerializer.Deserialize<RulesSaveRequest>(ReadBody(ctx), JsonOpts);
+            if (req is null)
+                res = new RulesSaveResult { ok = false, errors = { "请求体无法解析" } };
+            else
+                res = RulesApi.Save(req);
+        }
+        catch (Exception ex)
+        {
+            res = new RulesSaveResult { ok = false };
+            res.errors.Add(ex.Message);
+        }
+        WriteJson(ctx, res);
+    }
+
+    private static void TestRule(HttpListenerContext ctx)
+    {
+        try
+        {
+            var req = JsonSerializer.Deserialize<RulesTestRequest>(ReadBody(ctx), JsonOpts)
+                      ?? new RulesTestRequest();
+            WriteJson(ctx, RulesApi.Test(req.proc ?? "", req.title));
+        }
+        catch (Exception ex)
+        {
+            WriteJson(ctx, new { error = ex.Message });
+        }
+    }
+
+    private static string RulesHtml()
+    {
+        if (_rulesHtml is not null) return _rulesHtml;
+        _rulesHtml = Read("AppUsage.Web.rules.html");
+        return _rulesHtml;
+    }
 
     private static object LivePayload()
     {

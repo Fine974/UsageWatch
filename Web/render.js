@@ -391,6 +391,28 @@
       : '静态报告，不含基线对比') + extra;
   }
 
+  // 未归类：只负责「信号 + 入口」。明细列表和归类操作都在 /rules 配置页，
+  // 这里再列一遍没有意义 —— 它原本唯一的交互是「复制规则粘进 JSON」，那套流程已经作废了。
+  function renderUnknown(D) {
+    const card = el('unknown-card');
+    const box = el('unknown');
+    const sum = el('unknown-sum');
+    if (!card || !box) return;
+
+    const list = (D.unknown || []).filter(x => x.sec >= 30);
+    if (!list.length) { card.style.display = 'none'; return; }
+
+    card.style.display = '';
+    const total = list.reduce((a, x) => a + x.sec, 0);
+    if (sum) sum.textContent = `${fmt(total)} · ${list.length} 个页面`;
+
+    // 只给前三个页面名：够用来认出「是不是又是我没想到的那个页面」，
+    // 再多就是噪音了 —— 1% 量级的问题不该在主页上铺开成一张表
+    const names = list.slice(0, 3).map(x => x.n);
+    box.textContent = names.join(' · ') + (list.length > 3 ? ` 等 ${list.length} 个` : '');
+    box.title = list.map(x => `${x.n}  ${fmt(x.sec)}`).join('\n');
+  }
+
   // ---------- 周视图 ----------
   // 目标：一眼回答「这周比上周怎么样、哪天最猛、结构变了没有」
   function renderWeek(W, B) {

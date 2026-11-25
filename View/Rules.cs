@@ -47,6 +47,16 @@ internal static class Rules
         GroupColorMap.TryGetValue(group, out var c) ? c : "#8892a6";
 
     /// <summary>
+    /// 配置页用的分类清单。颜色和「是否算工作」都从这里取，
+    /// 免得前端再硬编码一份配色，两边对不上。
+    /// </summary>
+    internal static IEnumerable<(string Name, string Color, bool Work)> Groups() =>
+        GroupColorMap.Select(kv => (kv.Key, kv.Value, IsWork(kv.Key)));
+
+    /// <summary>外置规则文件。配置页和手工编辑操作的是同一个文件，不存在两份真相。</summary>
+    internal static string FilePath => Path.Combine(Store.Root, "rules.json");
+
+    /// <summary>
     /// 标题去噪：浏览器会在标题里塞标签页数量、私信未读数、应用名。
     /// 不剥掉这些，同一个页面会被拆成几十条（实测知乎被拆成 34 条）。
     /// </summary>
@@ -62,10 +72,12 @@ internal static class Rules
     };
 
     /// <summary>整段丢弃的标题：锁屏、空白页之类，不应计入任何工作。</summary>
-    private static readonly List<string> DropList = new()
+    private static readonly List<string> BuiltinDrops = new()
     {
         "Windows 默认锁屏界面", "锁屏界面", "新建标签页", "新标签页", "无标题", "通知中心",
     };
+
+    private static List<string> DropList = new(BuiltinDrops);
 
     internal static IReadOnlyList<string> DropTitles => DropList;
 
@@ -77,7 +89,7 @@ internal static class Rules
     /// 请写进 %APPDATA%\AppUsage\rules.json —— 外置规则优先级更高，可以覆盖这里，
     /// 也不会把内部信息带进代码仓库。格式见 rules.example.json。
     /// </summary>
-    internal static readonly List<SiteRule> Sites = new()
+    private static readonly List<SiteRule> BuiltinSites = new()
     {
         // 项目管理与协作
         new("禅道",                            "禅道",            "项目管理"),
@@ -124,11 +136,17 @@ internal static class Rules
     };
 
     /// <summary>
+    /// 运行时表 = 内置副本 + 外置规则。重载时整体替换引用而不是原地改，
+    /// 正在遍历旧表的线程不会撞上「集合已修改」，也就不用在归类热路径上加锁。
+    /// </summary>
+    internal static List<SiteRule> Sites { get; private set; } = new(BuiltinSites);
+
+    /// <summary>
     /// 应用映射：按进程名（不含 .exe）归类，大小写不敏感。
     /// ByProject=true 表示标题第二层是「项目」而不是「页面」，IDE 类应用用这个。
     /// 同样只收录通用软件，内部工具请配在 rules.json 的 apps 里。
     /// </summary>
-    internal static readonly Dictionary<string, AppRule> Apps = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, AppRule> BuiltinApps = new(StringComparer.OrdinalIgnoreCase)
     {
         // 浏览器
         ["msedge"] = new("msedge", "Edge", "浏览器"),
@@ -196,61 +214,117 @@ internal static class Rules
         ["mstsc"] = new("mstsc", "远程桌面", "系统"),
     };
 
+    internal static Dictionary<string, AppRule> Apps { get; private set; } =
+        new(BuiltinApps, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>内置规则只读视图，配置页要并排展示「内置已有什么」，免得重复添加。</summary>
+    internal static IReadOnlyList<SiteRule> BuiltinSiteRules => BuiltinSites;
+
+    internal static IReadOnlyDictionary<string, AppRule> BuiltinAppRules => BuiltinApps;
+
     private static bool _loaded;
+    private static readonly object ReloadGate = new();
+
+    /// <summary>上一次读 rules.json 失败的原因。配置页要把这个显性展示出来，否则用户会以为规则生效了。</summary>
+    internal static string? LastError { get; private set; }
 
     /// <summary>从 rules.json 读外部规则，插到最前面（优先级更高）。</summary>
     internal static void LoadOverrides()
     {
         if (_loaded) return;
-        _loaded = true;
+        lock (ReloadGate)
+        {
+            if (_loaded) return;
+            _loaded = true;
+            Apply(Build());
+        }
+    }
 
-        var path = Path.Combine(Store.Root, "rules.json");
-        if (!File.Exists(path)) return;
+    /// <summary>
+    /// 配置页保存后调用：按磁盘上的内容重建规则表，并丢掉归类缓存。
+    /// 不用重启进程，保存即生效。
+    /// </summary>
+    internal static void Reload()
+    {
+        lock (ReloadGate)
+        {
+            _loaded = true;
+            Apply(Build());
+        }
+        Classify.ClearCache();
+    }
+
+    /// <summary>
+    /// 构建「内置 + 外置」的新表。逐条容错：某一条写错只丢这一条，
+    /// 不会因为一个正则手滑把整份外置规则都废掉。
+    /// </summary>
+    private static (List<SiteRule> Sites, Dictionary<string, AppRule> Apps, List<string> Drops) Build()
+    {
+        var sites = new List<SiteRule>(BuiltinSites);
+        var apps = new Dictionary<string, AppRule>(BuiltinApps, StringComparer.OrdinalIgnoreCase);
+        var drops = new List<string>(BuiltinDrops);
+        LastError = null;
+
+        var path = FilePath;
+        if (!File.Exists(path)) return (sites, apps, drops);
 
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("sites", out var sites) && sites.ValueKind == JsonValueKind.Array)
+            if (root.TryGetProperty("sites", out var siteArr) && siteArr.ValueKind == JsonValueKind.Array)
             {
                 var extra = new List<SiteRule>();
-                foreach (var e in sites.EnumerateArray())
+                foreach (var e in siteArr.EnumerateArray())
                 {
-                    var m = e.GetProperty("match").GetString();
-                    var s = e.GetProperty("site").GetString();
+                    if (e.ValueKind != JsonValueKind.Object) continue;
+                    var m = e.TryGetProperty("match", out var mm) ? mm.GetString() : null;
+                    var s = e.TryGetProperty("site", out var ss) ? ss.GetString() : null;
                     var g = e.TryGetProperty("group", out var gg) ? gg.GetString() : null;
-                    if (!string.IsNullOrWhiteSpace(m) && !string.IsNullOrWhiteSpace(s))
-                        extra.Add(new SiteRule(m!, s!, string.IsNullOrWhiteSpace(g) ? "其他" : g!));
+                    if (string.IsNullOrWhiteSpace(m) || string.IsNullOrWhiteSpace(s)) continue;
+                    extra.Add(new SiteRule(m!, s!, string.IsNullOrWhiteSpace(g) ? "其他" : g!));
                 }
-                if (extra.Count > 0) Sites.InsertRange(0, extra);
+                if (extra.Count > 0) sites.InsertRange(0, extra);
             }
 
-            if (root.TryGetProperty("apps", out var apps) && apps.ValueKind == JsonValueKind.Array)
+            if (root.TryGetProperty("apps", out var appArr) && appArr.ValueKind == JsonValueKind.Array)
             {
-                foreach (var e in apps.EnumerateArray())
+                foreach (var e in appArr.EnumerateArray())
                 {
-                    var p = e.GetProperty("proc").GetString();
+                    if (e.ValueKind != JsonValueKind.Object) continue;
+                    var p = e.TryGetProperty("proc", out var pp) ? pp.GetString() : null;
                     if (string.IsNullOrWhiteSpace(p)) continue;
                     var n = e.TryGetProperty("name", out var nn) ? nn.GetString() : p;
                     var g = e.TryGetProperty("group", out var gg) ? gg.GetString() : "其他";
                     var byProj = e.TryGetProperty("byProject", out var bp) && bp.ValueKind == JsonValueKind.True;
-                    Apps[p!] = new AppRule(p!, n ?? p!, g ?? "其他", byProj);
+                    apps[p!] = new AppRule(p!, string.IsNullOrWhiteSpace(n) ? p! : n!, string.IsNullOrWhiteSpace(g) ? "其他" : g!, byProj);
                 }
             }
 
-            if (root.TryGetProperty("drop", out var drop) && drop.ValueKind == JsonValueKind.Array)
+            if (root.TryGetProperty("drop", out var dropArr) && dropArr.ValueKind == JsonValueKind.Array)
             {
-                foreach (var x in drop.EnumerateArray())
+                foreach (var x in dropArr.EnumerateArray())
                 {
+                    if (x.ValueKind != JsonValueKind.String) continue;
                     var v = x.GetString();
-                    if (!string.IsNullOrWhiteSpace(v) && !DropList.Contains(v)) DropList.Add(v!);
+                    if (!string.IsNullOrWhiteSpace(v) && !drops.Contains(v)) drops.Add(v!);
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // 规则文件写错了不能影响采集，静默退回内置规则
+            // 规则文件写错了不能影响采集，退回内置规则，但把原因记下来给配置页看
+            LastError = ex.Message;
         }
+
+        return (sites, apps, drops);
+    }
+
+    private static void Apply((List<SiteRule> Sites, Dictionary<string, AppRule> Apps, List<string> Drops) t)
+    {
+        Sites = t.Sites;
+        Apps = t.Apps;
+        DropList = t.Drops;
     }
 }

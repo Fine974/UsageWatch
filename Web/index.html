@@ -185,13 +185,19 @@ body.static .subline{margin-top:10px}
       <span class="lv-timer" id="lv-timer">00:00:00</span>
     </span>
     <span class="state" id="state-text">连接中…</span>
+    <button class="btn" id="btn-rules" title="管理归类规则">规则</button>
     <button class="btn icon" id="btn-theme" title="切换亮色 / 暗色"></button>
     <button class="btn" id="btn-pause">暂停采集</button>
   </div>
 
   <div class="daterow">
-    <div class="dates" id="dates"></div>
+    <div class="wkstrip">
+      <button class="wkbtn" id="wk-prev" title="上一周（←）">‹</button>
+      <div class="dates" id="dates"></div>
+      <button class="wkbtn" id="wk-next" title="下一周（→）">›</button>
+    </div>
     <input type="date" id="datepick" class="dpick" title="跳转到指定日期">
+    <span class="seg" id="viewtabs" style="margin-left:auto"><b data-v="day" class="on">日</b><b data-v="week">周</b></span>
   </div>
 
   <div id="dash">
@@ -232,6 +238,14 @@ body.static .subline{margin-top:10px}
         <div class="notes-foot" id="notes-foot"></div>
       </section>
     </div>
+
+    <section class="card ucard" id="unknown-card" style="display:none">
+      <span class="ucard-dot"></span>
+      <span class="ucard-cap">未归类</span>
+      <span class="ucard-num" id="unknown-sum"></span>
+      <span class="ucard-list" id="unknown"></span>
+      <a class="ucard-go" href="/rules">去归类 →</a>
+    </section>
 
     <details class="fold" id="fold">
       <summary><span>更细的时间视角</span><span class="arrow">▸</span></summary>
@@ -450,6 +464,13 @@ body.static .subline{margin-top:10px}
     else loadDay(curDate === todayStr() ? null : curDate);
   });
 })();
+</script>
+<script>
+  // 规则配置页：看板和服务同源，直接跳过去就是同一进程的 /rules
+  (function () {
+    var b = document.getElementById('btn-rules');
+    if (b) b.onclick = function () { location.href = '/rules'; };
+  })();
 </script>
 </body>
 </html>

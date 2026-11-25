@@ -22,6 +22,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Web\index.html" />
     <EmbeddedResource Include="Web\render.js" />
+    <EmbeddedResource Include="Web\rules.html" />
   </ItemGroup>
 
 </Project>
