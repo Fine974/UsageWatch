@@ -69,7 +69,7 @@ body{color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","
 .gtrack{flex:1;height:8px;background:var(--track);border-radius:4px;position:relative}
 .gfill{height:100%;border-radius:4px;transition:width .4s ease}
 .gbase{position:absolute;top:-3px;width:2px;height:14px;background:var(--dim);opacity:.5;border-radius:1px}
-.gval{width:78px;flex:none;text-align:right;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gval{width:90px;flex:none;text-align:right;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .gval i{font-style:normal;color:var(--dim)}
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:14px}
@@ -129,8 +129,39 @@ svg{display:block;width:100%;height:auto;overflow:visible}
 .empty{padding:60px;text-align:center;color:var(--dim)}
 .foot{color:var(--dim);font-size:11px;text-align:center;margin-top:20px}
 
+/* ---- 周视图 ---- */
+.wkbars{display:flex;align-items:flex-end;gap:7px;height:74px;margin-top:12px}
+.wkcol{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%}
+.wkcol.clickable{cursor:pointer}
+.wkbar{width:100%;background:var(--trend);border-radius:2px 2px 0 0;min-height:2px;transition:background .15s}
+.wkbar.hi{background:var(--accent)}
+.wkbar.none{background:var(--track)}
+.wkcol.clickable:hover .wkbar{background:var(--dim)}
+.wklab{font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+.wklab.hi{color:var(--accent)}
+
+.wkrow{display:flex;align-items:center;gap:10px;height:27px;font-size:12px}
+.wkrow.clickable{cursor:pointer}
+.wkrow.clickable:hover .wkdow,.wkrow.clickable:hover .wksec{color:var(--accent)}
+.wkdow{width:32px;flex:none;color:var(--muted)}
+.wkdate{width:40px;flex:none;color:var(--dim);font-variant-numeric:tabular-nums}
+.wktrack{flex:1;height:7px;background:var(--track);border-radius:4px;overflow:hidden}
+.wkfill{height:100%;border-radius:4px}
+.wksec{width:62px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.wkmeta{width:176px;flex:none;text-align:right;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- 未归类：一行摘要，明细在 /rules ---- */
+.ucard{display:flex;align-items:center;gap:10px;padding:10px 18px}
+.ucard-dot{width:7px;height:7px;border-radius:50%;background:#b07aa8;flex:none}
+.ucard-cap{font-size:12px;color:var(--muted);flex:none}
+.ucard-num{font-size:12.5px;color:var(--muted);flex:none;font-variant-numeric:tabular-nums}
+.ucard-list{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dim)}
+.ucard-go{flex:none;font-size:12px;color:var(--accent);text-decoration:none;border:1px solid var(--border);border-radius:6px;padding:2px 9px;transition:border-color .15s,background .15s}
+.ucard-go:hover{border-color:var(--accent);background:var(--hit)}
+body.static .ucard-go{display:none}
+
 body.static .topbar{justify-content:flex-end;margin-bottom:8px}
-body.static .brand,body.static .clock,body.static .livebar,body.static .state,body.static #btn-pause{display:none}
+body.static .brand,body.static .clock,body.static .livebar,body.static .state,body.static #btn-pause,body.static #btn-rules{display:none}
 body.static .daterow{display:none}
 body.static .subline{margin-top:10px}
 
@@ -215,6 +246,44 @@ body.static .subline{margin-top:10px}
     </details>
   </div>
 
+  <div id="weekdash" style="display:none">
+    <section class="hero">
+      <div class="hero-main">
+        <div class="cap"><span id="wk-label">—</span><span class="mono" id="wk-range"></span></div>
+        <div class="big" id="wk-total">-</div>
+        <div class="delta" id="wk-delta"></div>
+        <div class="subline">
+          <span>日均 <b id="wk-avg">-</b></span>
+          <span>工作日 <b id="wk-daycount">-</b></span>
+          <span data-tip="本周所有 25 分钟以上工作块的段数与合计时长">深度 <b id="wk-deep">-</b></span>
+          <span data-tip="各天中位停留的中位数">停留 <b id="wk-stay">-</b></span>
+        </div>
+        <div class="wkbars" id="wk-bars"></div>
+      </div>
+      <div class="hero-struct">
+        <div class="cap"><span>分类结构</span><span style="letter-spacing:0">竖线为上周</span></div>
+        <div id="wk-groups"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>逐日 <em>点一行跳到当天</em></h2>
+      <div id="wk-days-list"></div>
+    </section>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>本周去处</h2>
+        <div id="wk-sites"></div>
+      </section>
+      <section class="card">
+        <h2>值得注意</h2>
+        <ul class="notes" id="wk-notes"></ul>
+        <div class="notes-foot" id="wk-foot"></div>
+      </section>
+    </div>
+  </div>
+
   <div class="foot">usagewatch · 数据仅存本地</div>
 </div>
 <div id="tip"></div>
@@ -230,8 +299,10 @@ body.static .subline{margin-top:10px}
   const clockStr = s => pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s % 3600 / 60)) + ':' + pad(Math.floor(s % 60));
 
   const deepDate = new URLSearchParams(location.search).get('d');
+  const deepView = new URLSearchParams(location.search).get('view');
   let base = 0, baseAt = 0, paused = false, curDate = deepDate || TODAY;
   let baseline = null;
+  let mode = deepView === 'week' ? 'week' : 'day';
 
   setInterval(() => {
     if (base > 0) document.getElementById('lv-timer').textContent = clockStr(base + (Date.now() - baseAt) / 1000);
@@ -307,6 +378,42 @@ body.static .subline{margin-top:10px}
     } catch (e) { }
   }
 
+  async function loadWeek(d) {
+    try {
+      const r = await fetch('/api/week' + (d ? '?d=' + d : ''));
+      const w = await r.json();
+      if (window.renderWeek) window.renderWeek(w, baseline);
+    } catch (e) { }
+  }
+
+  // 日 / 周 切换。周视图不重新拉 baseline，用它已经加载好的那份
+  function setMode(v) {
+    mode = v === 'week' ? 'week' : 'day';
+    document.getElementById('dash').style.display = mode === 'day' ? '' : 'none';
+    document.getElementById('weekdash').style.display = mode === 'week' ? '' : 'none';
+    document.querySelectorAll('#viewtabs b').forEach(x => x.classList.toggle('on', x.dataset.v === mode));
+    if (mode === 'week') loadWeek(curDate);
+    else loadDay(curDate === todayStr() ? null : curDate);
+    try {
+      const u = new URL(location.href);
+      if (mode === 'week') u.searchParams.set('view', 'week'); else u.searchParams.delete('view');
+      if (curDate !== todayStr()) u.searchParams.set('d', curDate); else u.searchParams.delete('d');
+      history.replaceState(null, '', u);
+    } catch (e) { }
+  }
+
+  // 周视图里点某一天 → 跳回日视图看那天
+  window.uwGoto = function (d) {
+    curDate = d;
+    weekStart = mondayOf(d);
+    renderWeekBar();
+    setMode('day');
+  };
+
+  document.querySelectorAll('#viewtabs b').forEach(b => {
+    b.onclick = () => setMode(b.dataset.v);
+  });
+
   document.getElementById('btn-pause').onclick = async () => {
     await fetch(paused ? '/api/resume' : '/api/pause', { method: 'POST', body: '' });
     setTimeout(loadLive, 250);
@@ -323,17 +430,24 @@ body.static .subline{margin-top:10px}
 
   const deepView = new URLSearchParams(location.search).get('view');
   if (deepView && window.setDestView) window.setDestView(deepView);
+  // ?view=week 走周视图；?view=site|group|app 只切「去处分布」的视角
+  if (deepView && deepView !== 'week' && window.setDestView) window.setDestView(deepView);
 
   loadLive(); loadDates(); loadBaseline();
-  loadDay(deepDate || null);
+  if (mode === 'week') { setMode('week'); } else { loadDay(deepDate || null); }
   setInterval(loadLive, 2000);
-  setInterval(() => { if (!document.hidden) loadDay(curDate === todayStr() ? null : curDate); }, 15000);
+  setInterval(() => {
+    if (document.hidden) return;
+    if (mode === 'week') loadWeek(curDate);
+    else loadDay(curDate === todayStr() ? null : curDate);
+  }, 15000);
   setInterval(() => { if (!document.hidden) loadDates(); }, 60000);
   setInterval(() => { if (!document.hidden) loadBaseline(); }, 300000);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     loadDates(); loadLive();
-    loadDay(curDate === todayStr() ? null : curDate);
+    if (mode === 'week') loadWeek(curDate);
+    else loadDay(curDate === todayStr() ? null : curDate);
   });
 })();
 </script>

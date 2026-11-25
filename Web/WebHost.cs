@@ -103,6 +103,11 @@ internal static class WebHost
                     WriteJson(ctx, Baseline.Get(30, DateTime.Today));
                     break;
 
+                case "/api/week":
+                    var wd = ParseDate(ctx.Request.QueryString["d"]) ?? DateTime.Today;
+                    WriteJson(ctx, Weekly.Get(wd, SegmentsWithCurrent));
+                    break;
+
                 case "/api/pause" when isPost:
                     Recorder.Instance?.Pause();
                     WriteJson(ctx, new { paused = true });

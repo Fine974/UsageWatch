@@ -87,6 +87,7 @@
   const openSites = new Set();
   let lastDay = null;
   let lastBase = null;
+  let lastWeek = null;
 
   function renderDashboard(D, B) {
     if (!D || D.empty) {
@@ -390,6 +391,111 @@
       : '静态报告，不含基线对比') + extra;
   }
 
+  // ---------- 周视图 ----------
+  // 目标：一眼回答「这周比上周怎么样、哪天最猛、结构变了没有」
+  function renderWeek(W, B) {
+    if (!W || !W.days) return;
+    lastWeek = W;
+    const today = new Date().toLocaleDateString('sv');
+
+    el('wk-label').textContent = '本周 ' + W.label;
+    el('wk-range').textContent = W.start + ' → ' + W.end;
+    el('wk-total').textContent = fmt(W.totalSec);
+    el('wk-avg').textContent = W.avgSec > 0 ? fmt(W.avgSec) : '-';
+    el('wk-daycount').textContent = W.recorded;
+    el('wk-deep').textContent = W.deepCount > 0 ? W.deepCount + ' 段 · ' + fmt(W.deepSec) : '0';
+    el('wk-stay').textContent = W.medStay > 0 ? Math.round(W.medStay) + 's' : '-';
+
+    const dl = el('wk-delta');
+    if (W.prevRecorded > 0 && W.prevAvgSec > 0) {
+      const up = W.deltaPct >= 0;
+      dl.innerHTML = `<span class="${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(W.deltaPct).toFixed(0)}%</span>`
+        + ` 日均，上周 ${fmt(W.prevAvgSec)}（${W.prevRecorded} 个工作日）`;
+    } else {
+      dl.innerHTML = '<span style="color:var(--dim)">上周数据不足以对比</span>';
+    }
+
+    // 7 根柱：高度用 px 算，百分比在 flex 列里会被标签挤掉
+    const max = Math.max(...W.days.map(d => d.sec), 1);
+    el('wk-bars').innerHTML = W.days.map(d => {
+      const isToday = d.d === today;
+      const h = d.sec > 0 ? Math.max(3, Math.round(d.sec / max * 46)) : 2;
+      const cls = d.sec <= 0 ? 'wkbar none' : isToday ? 'wkbar hi' : 'wkbar';
+      const tip = d.sec > 0
+        ? `${d.weekday} ${d.d.slice(5)} · ${fmt(d.sec)}${isToday ? ' · 今天' : ''}`
+        : `${d.weekday} ${d.d.slice(5)} · ${d.d > today ? '还没到' : '无记录'}`;
+      return `<div class="wkcol clickable" data-d="${d.d}" data-tip="${esc(tip)}">
+        <div class="${cls}" style="height:${h}px"></div>
+        <div class="wklab${isToday ? ' hi' : ''}">${d.weekday.slice(1)}</div>
+      </div>`;
+    }).join('');
+
+    // 分类结构：本周条形 + 上周位置竖线
+    const gs = (W.groups || []).slice(0, 6);
+    const gmax = Math.max(...gs.map(g => g.pct), 1);
+    el('wk-groups').innerHTML = gs.length ? gs.map(g => {
+      const bx = g.hasPrev ? Math.min(100, g.pPct / gmax * 100) : null;
+      const diff = g.hasPrev ? g.pct - g.pPct : null;
+      const tip = g.hasPrev
+        ? `${g.n} ${g.pct.toFixed(1)}% · 上周 ${g.pPct.toFixed(1)}%`
+        : `${g.n} ${g.pct.toFixed(1)}% · 上周无记录`;
+      const dt = diff != null && Math.abs(diff) >= 1.5 ? ` <i>${diff > 0 ? '+' : ''}${diff.toFixed(0)}</i>` : '';
+      return `<div class="grow" data-tip="${esc(tip)}">
+        <div class="gname">${esc(g.n)}</div>
+        <div class="gtrack">
+          <div class="gfill" style="width:${(g.pct / gmax * 100).toFixed(1)}%;background:${adapt(g.c)}"></div>
+          ${bx != null ? `<div class="gbase" style="left:${bx.toFixed(1)}%"></div>` : ''}
+        </div>
+        <div class="gval">${g.pct.toFixed(0)}%${dt}</div>
+      </div>`;
+    }).join('') : '<div class="empty">没有数据</div>';
+
+    // 逐日：条长按本周最长的一天归一，同一天之间才能横向比
+    const dmax = Math.max(...W.days.map(d => d.sec), 1);
+    el('wk-days-list').innerHTML = W.days.map(d => {
+      if (d.empty) {
+        const why = d.d > today ? '还没到' : '无记录';
+        return `<div class="wkrow">
+          <div class="wkdow">${d.weekday}</div>
+          <div class="wkdate">${d.d.slice(5)}</div>
+          <div class="wktrack"></div>
+          <div class="wksec" style="color:var(--dim)">${why}</div>
+          <div class="wkmeta"></div>
+        </div>`;
+      }
+      const meta = `覆盖 ${d.coverage.toFixed(0)}% · 专注 ${fmt(d.focusSec)} · 深度 ${d.deepCount}`;
+      return `<div class="wkrow clickable" data-d="${d.d}">
+        <div class="wkdow">${d.weekday}</div>
+        <div class="wkdate">${d.d.slice(5)}</div>
+        <div class="wktrack"><div class="wkfill" style="width:${(d.sec / dmax * 100).toFixed(1)}%;background:${adapt(d.topc || '#8892a6')}"></div></div>
+        <div class="wksec">${fmt(d.sec)}</div>
+        <div class="wkmeta">${esc(meta)}</div>
+      </div>`;
+    }).join('');
+
+    const sites = W.sites || [];
+    if (sites.length) {
+      const smax = Math.max(...sites.map(s => s.sec), 1);
+      el('wk-sites').innerHTML = sites.slice(0, 8).map(s => `<div class="rank">
+        <div class="rname" title="${esc(s.n)}">${esc(s.n)}<span class="gtag">${esc(s.g)}</span></div>
+        <div class="rtrack"><div class="rfill" style="width:${(s.sec / smax * 100).toFixed(1)}%;background:${adapt(s.c)}"></div></div>
+        <div class="rval">${fmt(s.sec)}</div>
+        <div class="rpct">${s.pct.toFixed(0)}%</div>
+      </div>`).join('');
+    } else {
+      el('wk-sites').innerHTML = '<div class="empty">没有数据</div>';
+    }
+
+    const notes = W.notes || [];
+    el('wk-notes').innerHTML = notes.length
+      ? notes.map(t => `<li>${esc(t)}</li>`).join('')
+      : '<li class="none">本周没有特别值得注意的地方。</li>';
+    el('wk-foot').textContent = '日均只统计 3 小时以上的完整工作日，半天会把平均数拉低';
+
+    // 点柱 / 点行 → 回日视图看那天
+    document.querySelectorAll('#wk-bars .wkcol, #wk-days-list .wkrow.clickable').forEach(x => {
+      x.onclick = () => { if (global.uwGoto) global.uwGoto(x.dataset.d); };
+    });
   }
 
   const tip = () => document.getElementById('tip');
@@ -411,6 +517,7 @@
   });
 
   global.renderDashboard = renderDashboard;
+  global.renderWeek = renderWeek;
   global.setDestView = function (v) {
     if (v !== 'site' && v !== 'group' && v !== 'app') return;
     destView = v;
@@ -434,6 +541,7 @@
       try { localStorage.setItem('uw-theme', dark ? 'light' : 'dark'); } catch (e) { }
       paint();
       if (lastDay) renderDashboard(lastDay, lastBase);
+      if (lastWeek) renderWeek(lastWeek, lastBase);
     };
     paint();
   })();
